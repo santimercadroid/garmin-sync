@@ -24,7 +24,7 @@ client = Garmin(user, pwd)
 client.login()
 
 # 4. Lógica Regresiva (Igual que en Colab)
-fecha_inicio = date(2025, 12, 22)
+fecha_inicio = date.today() - timedelta(days=1)
 fecha_fin = date(2025, 1, 1)
 filas_a_subir = []
 encabezados = ['Fecha', 'Pasos', 'Gym (Minutos)']
