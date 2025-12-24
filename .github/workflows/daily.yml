@@ -1,0 +1,31 @@
+name: Garmin Sync Daily
+
+on:
+  schedule:
+    # Este comando le dice al robot que despierte a las 05:00 AM de Argentina (08:00 UTC)
+    - cron: '0 8 * * *' 
+  workflow_dispatch: # Esto activa el botón para que lo corras manualmente cuando quieras
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run script
+        env:
+          # Aquí el robot toma tus contraseñas de los "Secrets" que configuraste
+          GARMIN_USER: ${{ secrets.GARMIN_USER }}
+          GARMIN_PWD: ${{ secrets.GARMIN_PWD }}
+          TRIX_ID: ${{ secrets.TRIX_ID }}
+          GOOGLE_JSON: ${{ secrets.GOOGLE_JSON }}
+        run: python main.py
