@@ -7,6 +7,7 @@ from datetime import date, timedelta, datetime
 import time
 
 # 1. Cargar secretos de GitHub
+# Asegúrate de que estos nombres coincidan con tus Secrets en GitHub
 user = os.environ['GARMIN_USER']
 pwd = os.environ['GARMIN_PWD']
 trix_id = os.environ['TRIX_ID']
@@ -23,29 +24,36 @@ worksheet = sh.worksheet("[Data] Garmin")
 client = Garmin(user, pwd)
 client.login()
 
-# 4. Configuración: AÑO COMPLETO 2025
-# Procesamos desde el 1 de Enero hasta Ayer
-fecha_fin_proceso = date.today() - timedelta(days=1)
-fecha_inicio_proceso = date(2025, 1, 1)
+# 4. Configuración: VENTANA MÓVIL (ROLLING WINDOW)
+# Definimos "Hoy" y la "Fecha de Corte" (hace 6 meses / 180 días)
+hoy = date.today()
+dias_ventana = 180  
+fecha_corte = hoy - timedelta(days=dias_ventana)
 
-# Encabezados (En Inglés)
+# Garmin procesará desde la fecha de corte hasta Ayer
+fecha_fin_proceso = hoy - timedelta(days=1)
+fecha_inicio_proceso = fecha_corte
+
+# Encabezados (Deben coincidir siempre para que la fusión funcione)
 headers = ['Date', 'Steps', 'Gym (Minutes)', 'Ran?', 'Distance (km)', 
            'Weight (kg)', 'Body Fat (%)', 'Sleep Score', 'Sleep Time', 'HRV']
 
-print(f"🚀 Ejecutando Sincronización Total 2025 (GitHub Actions)...")
+print(f"🚀 Ejecutando Sincronización Móvil (Ventana de {dias_ventana} días)...")
+print(f"🔄 Se reescribirán datos desde: {fecha_inicio_proceso}")
+print(f"🔒 Los datos anteriores a esa fecha se preservarán intactos.")
 
 # --- A. MAPEO DE PESO (CON TRADUCTOR DE FECHAS) ---
 weight_map = {}
 
 try:
-    print("⚖️ Descargando historial completo de peso...")
-    # Descargamos desde 2024 para tener contexto
-    w_history = client.get_body_composition('2024-01-01', fecha_fin_proceso.isoformat())
+    print("⚖️ Descargando historial de peso reciente...")
+    # Descargamos un poco más atrás de la fecha de corte para asegurar contexto
+    start_weight = (fecha_inicio_proceso - timedelta(days=30)).isoformat()
+    w_history = client.get_body_composition(start_weight, fecha_fin_proceso.isoformat())
     
     lista_pesos = w_history.get('dateWeightList', []) + w_history.get('entries', [])
     
     for entry in lista_pesos:
-        # Obtenemos fecha cruda (puede ser timestamp)
         d_raw = entry.get('date', entry.get('calendarDate', ''))
         
         # Traductor de Fechas (Timestamp -> String)
@@ -63,30 +71,31 @@ try:
             f_pct = round(entry.get('bodyFat', 0), 1)
             weight_map[d_str] = {'w': w_kg, 'f': f_pct}
     
-    print(f"✅ Historial cargado: {len(weight_map)} registros.")
+    print(f"✅ Historial peso cargado: {len(weight_map)} registros.")
 
 except Exception as e:
     print(f"⚠️ Alerta historial peso: {e}")
 
 # --- B. PRE-CARGA DE PESO INICIAL ---
-# Buscamos el último peso antes de 2025 para empezar el año correctamente
+# Buscamos el último peso conocido antes del inicio del proceso para evitar ceros
 last_w = 0
 last_f = 0
-
 start_iso = fecha_inicio_proceso.isoformat()
+
+# Ordenamos fechas para encontrar la más cercana anterior
 for f in sorted(weight_map.keys()):
     if f < start_iso:
         last_w = weight_map[f]['w']
         last_f = weight_map[f]['f']
 
-print(f"📍 Peso base inicial: {last_w} kg")
+print(f"📍 Peso base inicial (arrastrado): {last_w} kg")
 
 
-# --- C. PROCESAMIENTO DÍA A DÍA ---
-filas_a_subir = []
+# --- C. PROCESAMIENTO DÍA A DÍA (SOLO VENTANA NUEVA) ---
+filas_nuevas = []
 curr = fecha_inicio_proceso
 
-print("⏳ Procesando días... esto tomará unos minutos.")
+print("⏳ Procesando días nuevos... esto tomará unos minutos.")
 
 while curr <= fecha_fin_proceso:
     iso_date = curr.isoformat()
@@ -143,24 +152,73 @@ while curr <= fecha_fin_proceso:
         except: pass
 
         # Agregar a la lista
-        filas_a_subir.append([iso_date, steps, gym, ran, dist_km, 
+        filas_nuevas.append([iso_date, steps, gym, ran, dist_km, 
                               last_w, last_f, sleep_score, sleep_time_str, hrv_val])
         
-        # Pausa de seguridad (Vital para evitar bloqueo de Garmin)
+        # Pausa de seguridad
         time.sleep(1.2)
         
     except Exception as e:
         print(f"❌ Error en {iso_date}: {e}")
-        # Fila vacía en caso de error para mantener continuidad
-        filas_a_subir.append([iso_date, 0, "Error", "Error", 0, 0, 0, "Error", "Error", "Error"])
+        # Fila vacía con error para mantener continuidad
+        filas_nuevas.append([iso_date, 0, "Error", "Error", 0, 0, 0, "Error", "Error", "Error"])
 
     curr += timedelta(days=1)
 
-# Orden Regresivo (Más reciente arriba)
-filas_a_subir.reverse()
+# Orden Regresivo (Más reciente arriba) para los nuevos datos
+filas_nuevas.reverse()
 
-# Actualizar Google Sheets (Sobreescribir todo)
-worksheet.clear()
-worksheet.update(values=[headers] + filas_a_subir, value_input_option='USER_ENTERED')
 
-print(f"✨ ¡Sincronización Completa Finalizada! {len(filas_a_subir)} días actualizados.")
+# --- D. FUSIÓN Y ACTUALIZACIÓN (DATA NUEVA + DATA VIEJA) ---
+print("💾 Combinando datos nuevos con históricos...")
+
+try:
+    # 1. Leer todo lo que hay actualmente en el Sheet
+    datos_actuales = worksheet.get_all_values()
+    
+    datos_finales = []
+
+    if not datos_actuales:
+        # Si la hoja está vacía, solo ponemos encabezados y lo nuevo
+        datos_finales = [headers] + filas_nuevas
+        print("📂 Hoja vacía. Se subirán solo los datos nuevos.")
+    else:
+        # Separamos encabezados y cuerpo viejo
+        # Nota: Asumimos que la fila 1 son headers.
+        filas_viejas = datos_actuales[1:]
+        
+        filas_historicas = []
+        fecha_corte_iso = fecha_corte.isoformat()
+
+        # 2. Filtrar: Rescatar SOLO lo que es más viejo que la fecha de corte
+        for fila in filas_viejas:
+            if not fila: continue # Saltar filas vacías si las hay
+            
+            fecha_fila = fila[0] # Asumiendo columna A es Date
+            
+            # Comparación de Strings ISO (YYYY-MM-DD)
+            # Si fecha_fila < fecha_corte, es historia antigua -> SE QUEDA
+            # Si fecha_fila >= fecha_corte, es reciente -> SE REEMPLAZA por lo nuevo
+            try:
+                # Limpieza simple y validación de longitud para evitar errores con filas basura
+                if len(fecha_fila) >= 10 and fecha_fila < fecha_corte_iso:
+                    filas_historicas.append(fila)
+            except:
+                # Si falla la comparación, por seguridad lo guardamos como histórico
+                filas_historicas.append(fila)
+
+        print(f"📚 Se rescataron {len(filas_historicas)} registros históricos (anteriores a {fecha_corte}).")
+
+        # 3. Construir la lista final: 
+        # [HEADERS] + [NUEVOS (Recientes)] + [HISTÓRICOS (Viejos)]
+        datos_finales = [headers] + filas_nuevas + filas_historicas
+
+    # 4. Actualizar Google Sheets (Sobreescritura completa con la lista fusionada)
+    worksheet.clear()
+    worksheet.update(values=datos_finales, value_input_option='USER_ENTERED')
+
+    print(f"✨ ¡Sincronización Completa! {len(filas_nuevas)} días refrescados. {len(datos_finales)-1} días totales en hoja.")
+
+except Exception as e:
+    print(f"❌ Error crítico al actualizar Sheets: {e}")
+    exit(1) # Forzar error en GitHub Actions si falla esta parte crítica
