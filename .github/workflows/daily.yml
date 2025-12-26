@@ -3,7 +3,7 @@ name: Garmin Sync Daily
 on:
   schedule:
     # 11:00 UTC = 08:00 Argentina
-    - cron: '0 11 * * *'
+    - cron: '0 06 * * *'
   workflow_dispatch:
 
 jobs:
