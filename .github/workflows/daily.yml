@@ -3,7 +3,7 @@ name: Garmin Sync Daily
 on:
   schedule:
     # 11:00 UTC = 08:00 Argentina
-    - cron: '0 06 * * *'
+    - cron: '0 11 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,8 +16,9 @@ jobs:
         with:
           python-version: '3.9'
       - name: Install dependencies
+        # AQUÍ AGREGAMOS LA LIBRERÍA QUE FALTA:
         run: |
-          pip install gspread google-auth garminconnect
+          pip install gspread google-auth garminconnect google-api-python-client pandas
       - name: Run script
         env:
           GARMIN_USER: ${{ secrets.GARMIN_USER }}
