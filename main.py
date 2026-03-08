@@ -242,6 +242,17 @@ def parse_date_calendar(date_str):
     date_str = date_str.strip()
     if not date_str: return None
     
+    # 1. Try standard ISO format first (YYYY-MM-DD)
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date().isoformat()
+    except: pass
+
+    # 2. Try standard Slash format (DD/MM/YYYY)
+    try:
+        return datetime.strptime(date_str, "%d/%m/%Y").date().isoformat()
+    except: pass
+    
+    # 3. Text-month logic
     meses = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
              'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12,
              'Ene': 1, 'Abr': 4, 'Ago': 8, 'Dic': 12}
@@ -304,9 +315,14 @@ def run_calendar_sync():
             except Exception as e: print(f"   ⚠️ Error borrando {fecha}: {e}")
 
         for fecha in fechas_a_crear:
+            # Calculate the next day for the end date (Google Calendar API requirement)
+            fecha_obj = datetime.strptime(fecha, "%Y-%m-%d").date()
+            fecha_end = (fecha_obj + timedelta(days=1)).isoformat()
+
             event_body = {
                 'summary': '✅ Smoke Free',
-                'start': {'date': fecha}, 'end': {'date': fecha},
+                'start': {'date': fecha}, 
+                'end': {'date': fecha_end},
                 'colorId': '2', 'transparency': 'transparent'
             }
             try:
